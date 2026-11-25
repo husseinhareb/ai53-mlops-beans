@@ -2,6 +2,19 @@
 
 Bean-leaf disease classification (3 classes, 1,295 images). Starter CNN in `src/model.py`.
 
+## Summary
+
+| Item | Result |
+|------|--------|
+| Pipeline | `dvc.yaml`: VALIDATE, then PREPARE, then two independent branches TRAIN and EVALUATE (no TRAIN to EVALUATE edge) |
+| Data | 1,295 images versioned with DVC (`data/raw.dvc`, md5 `2b62d5a2...`), quality gate PASS with exact counts 1034 / 133 / 128 and full pixel decode |
+| Repeatability | Same seed gives bit-identical epochs in separate processes and folders (Run A epoch 1 = smoke-run epoch 1) |
+| DVC predictions | Written and committed (`ee7a0de`) before any training; every observed rerun/reuse matched |
+| Candidates (val. macro-F1) | A baseline 0.6254, B lower learning rate 0.6091, C augmentation 0.6416 |
+| Selection | Run C `8abe4eb5d23b4d7ca0f4c02721bced8e`, by the rule fixed before training; committed (`09132e0`) before the test set was used |
+| Final test (run once) | accuracy 0.6406 (82/128), macro-F1 0.6366; main weakness: 20 of 86 diseased leaves predicted healthy |
+| Hand-in checks | 19/19 tests pass (tests unchanged), `dvc status` up to date, DVC remote in sync for all commits, `git status` empty |
+
 ## Milestone 0: Starter audit
 
 Files read before any change: `params.yaml`, `pyproject.toml`, `.gitignore`, `src/reproducibility.py`, `src/validate_data.py`, `src/provenance.py`, `src/data.py`, `src/prepare.py`, `src/train.py`, `src/evaluate.py`, `scripts/check_environment.py`.
@@ -495,6 +508,22 @@ TRAIN was not run: EVALUATE took the model from MLflow through `selection.run_id
 
 **Interpretation.** The test scores are within about 0.01 of the validation scores, so the selection did not produce an over-optimistic estimate: the validation set was a fair guide. The per-class view shows the main weakness: healthy leaves are recognised well (recall 0.81), but the two diseases are often confused with each other (11 + 7 images) and, more seriously, 20 of the 86 diseased test leaves (9 + 11) are predicted healthy. For a disease-detection use case those missed diseases are the most costly errors, so Phase 2 should look at per-class recall for the disease classes, not only macro-F1. Longer training and a larger image size are the obvious next experiments, compared through new validation Runs, not on this test set.
 
+### Provenance of the three candidate Runs
+
+Each run manifest was read back from its MLflow artifacts. All three report `dirty: true`, which is accurate: when TRAIN started, the folder had changes that were not in the commit. The changed paths show what they were:
+
+| Run | Commit in manifest | `changed_paths` | Code or config among them |
+|-----|--------------------|-----------------|---------------------------|
+| A | `ee7a0de` | `dvc.lock`, `reports/data_summary.json` | none |
+| B | `a9b7b9d` (learning-rate commit) | `reports/run_manifest.json`, `reports/train_summary.json`, `reports/training_curves.png` | none |
+| C | `f35c5a3` (Run C setup commit) | `reports/run_manifest.json`, `reports/train_summary.json`, `reports/training_curves.png` | none |
+
+In A, VALIDATE and PREPARE had just written `dvc.lock` and their report in the same `dvc repro`. In B and C, DVC had deleted TRAIN's previous outputs before running it. No file under `src/`, nor `params.yaml`, `dvc.yaml`, `uv.lock` or `pyproject.toml`, was modified in any Run, so each Run's code and settings are exactly those of the recorded commit. This is inherent to running TRAIN through `dvc repro`, which always touches pipeline outputs first. Improvement for Phase 2: also record a `code_dirty` flag that ignores the outputs declared in `dvc.yaml` and `dvc.lock`, so a clean code state reads as clean at a glance. It was not changed now because `src/provenance.py` is a TRAIN dependency, so editing it would invalidate the three recorded Runs.
+
+### Audit follow-up
+
+Audit issue 13 is fixed in `scripts/check_environment.py` (not a dependency of any DVC stage, so no result changes): the check now compares `sys.prefix` with the project `.venv` instead of the resolved executable. It prints `SETUP PASS` under `uv run --locked` and still prints `FAIL: Interpreter is outside the project .venv` when run with the system Python. The other issues were addressed by Milestones 1 to 8; issue 12 (output name collisions in `prepare.py`) is left for Phase 2, because the current archives have no collision and changing PREPARE's code would rerun the pipeline.
+
 ### Hand-in checks
 
 ```
@@ -503,6 +532,8 @@ $ uv run --locked pytest -q
 19 passed
 $ uv run --locked dvc status
 Data and pipelines are up to date.
+$ uv run --locked python scripts/check_environment.py
+SETUP PASS
 ```
 
 Kept for Phase 2 (not in Git): `mlflow.db`, `mlartifacts/` and `../ai53-phase1-dvc-storage`.
