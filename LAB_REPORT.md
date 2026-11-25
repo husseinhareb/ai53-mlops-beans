@@ -158,3 +158,66 @@ $ uv run --locked python -m src.validate_data
 Running the validator twice produces a byte-identical `reports/data_quality.json` (checked with `cmp`), so DVC will only see a change when the data does.
 
 Extra check (on a copy of `data/raw`, not committed): cutting a test JPEG in half leaves a valid header (`Image.open()` still reports `JPEG (500, 500)`), but the validator rejects it: `OSError - Cannot decode image .../healthy_test.0.jpg: image file is truncated`. A header-only check would have let it through.
+
+## Milestone 4: DVC pipeline design
+
+`dvc.yaml` defines four stages. Each `cmd` is the exact command from the guide (`uv run --locked python -m src.<module>`).
+
+### Inputs and outputs traced from the code
+
+| Stage | Data deps | Code deps (including indirect imports) | Params | Outputs |
+|-------|-----------|----------------------------------------|--------|---------|
+| validate | `data/raw` | `src/validate_data.py` | none (the script reads no setting) | `reports/data_quality.json` (cache: false) |
+| prepare | `data/raw`, `reports/data_quality.json` | `src/prepare.py` | `data.image_size` | `data/processed/{train,validation,test}`, `data/processed/manifests/{train,validation,test}.csv`, `reports/data_summary.json` (cache: false) |
+| train | `data/processed/{train,validation}`, `manifests/{train,validation}.csv` | `src/train.py`, `src/data.py`, `src/model.py`, `src/provenance.py`, `src/reproducibility.py` (via `data.py`) | `data.image_size`, `train.batch_size`, `train.epochs`, `train.learning_rate`, `train.dropout`, `train.random_state`, `augmentation.enabled`, `augmentation.horizontal_flip`, `augmentation.rotation_degrees`, `compute.device`, `tracking.experiment` | `models/model.pt` (DVC cache), `reports/training_curves.png`, `reports/run_manifest.json` (cache: false), metrics `reports/train_summary.json` (cache: false) |
+| evaluate | `data/processed/test`, `manifests/{train,validation}.csv` | `src/evaluate.py`, `src/data.py`, `src/reproducibility.py` (via `data.py`), `src/provenance.py`, `src/model.py` (needed to unpickle the logged `BeanCNN`) | `selection.run_id`, `evaluation.batch_size`, `data.image_size`, `compute.device`, `tracking.experiment` | `reports/test_confusion_matrix.png` (cache: false), metrics `reports/test_metrics.json` (cache: false) |
+
+Every stage also depends on `uv.lock` and `pyproject.toml`, since they define the Python environment that `uv run --locked` executes in. `src/__init__.py` is empty and was left out.
+
+Design choices:
+
+- **PREPARE outputs are declared per folder and per manifest**, not as one `data/processed` directory. That lets TRAIN depend only on train/validation data and EVALUATE only on test data (plus the two manifests it hashes), so the two branches stay separate.
+- **EVALUATE reads `manifests/train.csv` and `validation.csv`** even though it scores test images: `validate_selected_run()` calls `training_data_identity()` on them to check that the selected Run was trained on the current prepared data.
+- **`tracking.uri` is not a param of any stage.** It says where the MLflow server is, not what is trained or evaluated, so moving the server should not retrain or re-score anything. `tracking.experiment` is included: it decides which experiment the candidate is logged in, and EVALUATE rejects Runs from another experiment.
+- **Side effects DVC cannot see:** TRAIN also writes a Run to MLflow (`mlflow.db`, `mlartifacts/`). DVC does not track these, which is why the run manifest and MLflow Run ID matter.
+
+### Pipeline checks
+
+```
+$ uv run --locked dvc stage list
+validate  Outputs reports/data_quality.json
+prepare   Outputs data/processed/train, data/processed/validation, data/processed/test, ...
+train     Outputs models/model.pt, reports/training_curves.png, reports/run_manifest.json ...
+evaluate  Outputs reports/test_confusion_matrix.png; Reports reports/test_metrics.json
+
+$ uv run --locked dvc dag
+        +--------------+
+        | data/raw.dvc |
+        +--------------+
+           **        **
++----------+           *
+| validate |         **
++----------+       **
+           **    **
+           +---------+
+           | prepare |
+           +---------+
+           **        **
+  +-------+         +----------+
+  | train |         | evaluate |
+  +-------+         +----------+
+```
+
+All four stages appear, and there is no edge from `train` to `evaluate`: EVALUATE gets its model from MLflow through `selection.run_id`, not from `models/model.pt`.
+
+### 4.2 Design questions
+
+**Should PREPARE depend on `reports/data_quality.json`?** Yes. It is the only thing that connects VALIDATE to PREPARE in the DAG. Without it DVC could run PREPARE before (or without) the quality gate. Because VALIDATE raises on any failure, the report only exists after a PASS, so PREPARE never runs on data that failed the checks.
+
+**Should PREPARE also depend directly on `data/raw`?** Yes. PREPARE reads the raw images, and the quality report only summarises counts and classes. If an image were replaced by a different valid image of the same class, the report would stay byte-identical and DVC would wrongly reuse the old processed data. Depending on `data/raw` catches any change in the pixels.
+
+**Which changes in `params.yaml` should make TRAIN run again?** Only the settings TRAIN reads: `train.*` (batch size, epochs, learning rate, dropout, seed), `augmentation.*` (enabled, flip probability, rotation), `compute.device`, `data.image_size` and `tracking.experiment`. A change to `data.image_size` also reruns TRAIN indirectly, because PREPARE produces new images. Changes to `evaluation.batch_size`, `selection.run_id` or `tracking.uri` must not retrain. That is why params are listed key by key rather than as the whole file.
+
+**Why should EVALUATE track `selection.run_id`?** The run ID is the only thing that says which model is being tested: the model lives in MLflow, not in a file DVC can hash. Tracking it makes DVC rerun EVALUATE when a different model is selected, and records in `dvc.lock` which Run the committed `test_metrics.json` belongs to. Otherwise the saved test results could silently describe a model that is no longer the selected one.
+
+**Which file contains scores that DVC should track as metrics?** `reports/test_metrics.json`, which holds the final test accuracy and macro-F1 of the selected Run. I also declared `reports/train_summary.json` as a metric because it holds the final validation scores and the training time of each candidate, so `dvc metrics diff` can compare Runs A, B and C across commits using validation evidence only.
