@@ -221,3 +221,55 @@ All four stages appear, and there is no edge from `train` to `evaluate`: EVALUAT
 **Why should EVALUATE track `selection.run_id`?** The run ID is the only thing that says which model is being tested: the model lives in MLflow, not in a file DVC can hash. Tracking it makes DVC rerun EVALUATE when a different model is selected, and records in `dvc.lock` which Run the committed `test_metrics.json` belongs to. Otherwise the saved test results could silently describe a model that is no longer the selected one.
 
 **Which file contains scores that DVC should track as metrics?** `reports/test_metrics.json`, which holds the final test accuracy and macro-F1 of the selected Run. I also declared `reports/train_summary.json` as a metric because it holds the final validation scores and the training time of each candidate, so `dvc metrics diff` can compare Runs A, B and C across commits using validation evidence only.
+
+## Milestone 5: Record what each MLflow Run used
+
+### 5.1 Run manifest (`src/provenance.py`)
+
+`build_run_manifest()` returns five sections, written to `reports/run_manifest.json`:
+
+| Section | Content | How it is collected |
+|---------|---------|---------------------|
+| `git` | `commit_sha`, `dirty`, `changed_paths`, `available` | `git rev-parse HEAD` and `git status --porcelain` through `subprocess.run`; the exit code is checked, so outside a repository the fields are `null` and `available` is `false` instead of a wrong "clean" answer |
+| `data` | `training_data_identity`, manifest paths | supplied `training_data_identity()` (SHA-256 of the train and validation manifests, which contain the processed image hashes) |
+| `environment` | OS, platform, machine, Python, `cuda_available`, CUDA runtime and cuDNN (when available), versions of torch, torchvision, dvc, mlflow, numpy, pandas, pillow, scikit-learn | `platform`, `importlib.metadata.version()`, `torch.version.cuda` |
+| `configuration` | image size, batch size, epochs, learning rate, dropout, augmentation enabled, flip probability, rotation | `params.yaml` |
+| `execution` | resolved device, requested device, seed, MLflow Run ID, experiment name | `train.py` arguments, `run.info.run_id` |
+
+`changed_paths` lists what made the tree dirty, so a `dirty: true` can be interpreted. Expected case: when `dvc repro` runs VALIDATE or PREPARE before TRAIN, it rewrites `dvc.lock` and report files, so the tree is dirty with only pipeline outputs, not code.
+
+Bug found while testing: the first version stripped the whole `git status` output, which removed the leading space of the first porcelain line (` M src/...`) and recorded `rc/provenance.py`. Only the commit SHA is stripped now.
+
+### 5.2 MLflow logging (`src/train.py`)
+
+In the required order inside one `mlflow.start_run()` in experiment `bean-image-classification`:
+
+1. `write_run_manifest(params, str(device), run.info.run_id, ...)` before any training output is written;
+2. `training_identity = run_manifest["data"]["training_data_identity"]`;
+3. `mlflow.log_params()` with the 11 required parameters;
+4. `mlflow.data.from_pandas(train_manifest_df, source=..., name="bean-training", targets="label")` then `mlflow.log_input(..., context="training")`;
+5. `mlflow.log_metrics({train_loss, val_loss, val_accuracy, val_macro_f1}, step=epoch)` inside the epoch loop;
+6. `mlflow.log_metric("training_seconds", ...)` after the loop;
+7. `mlflow.log_artifact()` for `training_curves.png`, `train_summary.json` and `run_manifest.json` (under `reports/`);
+8. model moved to CPU and `eval()`, two validation images (NCHW, normalized float32) as input example, logits computed under `torch.no_grad()`, `infer_signature(input, logits)`;
+9. `mlflow.pytorch.log_model(name="bean-cnn", signature, input_example, metadata={class_names, image_size}, serialization_format="pickle", code_paths=["src"])`.
+
+The test set is never touched in TRAIN.
+
+### 5.3 Tests and smoke run
+
+```
+$ uv run --locked pytest -q
+...................                                                      [100%]
+19 passed
+```
+
+The tests do not execute `train.py`, so I also ran VALIDATE, PREPARE and a 1-epoch TRAIN in a throwaway copy of the project with its own SQLite MLflow store (deleted afterwards, nothing added to the real Run history). The logged Run had status `FINISHED`, the 11 params, the 4 per-epoch metrics plus `training_seconds`, the `bean-training` dataset input (context `training`, 1,034 rows), the 3 artifacts, and the `bean-cnn` model with metadata `{class_names: [angular_leaf_spot, bean_rust, healthy], image_size: 96}` and signature `Tensor(float32, (-1, 3, 96, 96)) -> Tensor(float32, (-1, 3))`. `src.evaluate.validate_selected_run()` accepted the Run and `mlflow.pytorch.load_model()` loaded it in eval mode. No test images were scored.
+
+MLflow prints `UserWarning: The specified dataset source can be interpreted in multiple ways: LocalArtifactDatasetSource, LocalArtifactDatasetSource` when creating the dataset. It is harmless (the same source class is registered twice) and the source is resolved correctly.
+
+### Engineering checkpoint 4
+
+- **Git** records which version of the code, configuration (`params.yaml`, `dvc.yaml`) and lock files a Run was started from, identified by the commit SHA stored in the run manifest.
+- **DVC** records which exact data and outputs belong to that commit: the hashes of the raw images, the processed data, the local model file and each stage's dependencies and params in `dvc.lock`, with the content stored in the DVC remote.
+- **MLflow** records what happened in the Run itself: the parameters, per-epoch metrics, training time, input dataset, artifacts (including the run manifest that links back to Git and the data identity) and the logged model with its signature and metadata, under a Run ID.
