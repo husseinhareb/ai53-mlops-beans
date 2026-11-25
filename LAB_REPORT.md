@@ -273,3 +273,32 @@ MLflow prints `UserWarning: The specified dataset source can be interpreted in m
 - **Git** records which version of the code, configuration (`params.yaml`, `dvc.yaml`) and lock files a Run was started from, identified by the commit SHA stored in the run manifest.
 - **DVC** records which exact data and outputs belong to that commit: the hashes of the raw images, the processed data, the local model file and each stage's dependencies and params in `dvc.lock`, with the content stored in the DVC remote.
 - **MLflow** records what happened in the Run itself: the parameters, per-epoch metrics, training time, input dataset, artifacts (including the run manifest that links back to Git and the data identity) and the logged model with its signature and metadata, under a Run ID.
+
+## Milestone 6: Predict which stages need to run again
+
+### 6.1 Predictions (written before running DVC)
+
+Assumption: all outputs, including the test results, are up to date; one change at a time; `selection.run_id` fixed.
+
+| Change | VALIDATE | PREPARE | TRAIN | EVALUATE |
+|--------|----------|---------|-------|----------|
+| Change `train.learning_rate` | REUSED | REUSED | RERUN | REUSED |
+| Change `data.image_size` | REUSED | RERUN | RERUN | NEEDS UPDATE |
+| Edit `src/validate_data.py`; the quality report stays the same | RERUN | REUSED | REUSED | REUSED |
+| Edit only `README.md` | REUSED | REUSED | REUSED | REUSED |
+
+### Engineering checkpoint 5
+
+**Setting change: `train.learning_rate`.** In `dvc.yaml` this key appears only under `train.params`. VALIDATE has no params and its deps (`data/raw`, `src/validate_data.py`, `uv.lock`, `pyproject.toml`) are unchanged, so it is REUSED. PREPARE only tracks `data.image_size` and its data and code deps are unchanged, so REUSED. TRAIN tracks `train.learning_rate`, so its params hash changes and it must RERUN. EVALUATE does not track the learning rate and none of its deps change (`data/processed/test`, the two manifests, its code); it scores the model from the fixed `selection.run_id`, which lives in MLflow and is not affected by a new TRAIN, so the saved test results still describe the selected model: REUSED.
+
+**Setting change: `data.image_size`.** VALIDATE does not read it: REUSED. PREPARE tracks it, so it RERUNs and writes new resized images and manifests. TRAIN tracks it directly and its data deps change: RERUN. EVALUATE tracks `data.image_size` and depends on `data/processed/test` and the two manifests, which all change, so the saved results no longer match: NEEDS UPDATE. (Running it would actually fail: the selected Run was logged with `image_size=96` and its `training_data_identity` no longer matches, so a new Run would have to be selected.)
+
+**File edit: `src/validate_data.py` with an unchanged report.** The file is a dep of VALIDATE only, so VALIDATE RERUNs. It writes `reports/data_quality.json` again, but the report is deterministic (sorted, no timestamps), so the file hash is identical. PREPARE depends on that report and on `data/raw`, both unchanged by hash, so it is REUSED, and TRAIN and EVALUATE, whose inputs come from PREPARE, are REUSED too. This only works because the report has no timestamp.
+
+**File edit: `README.md`.** No stage lists it as a dep, so every stage is REUSED.
+
+### Decisions made before training
+
+- **Primary metric:** validation macro-F1 at the final epoch (`val_macro_f1`, the logged model is the last-epoch model).
+- **Tie-break:** if two Runs are within 0.01 macro-F1 (about one validation image out of 133), choose the lower final `val_loss`; if still tied, the shorter `training_seconds`.
+- **Expected effect of a lower learning rate (0.001 to 0.0003):** with Adam and only 4 epochs, each step moves the weights about three times less, so the model should converge more slowly: higher train and validation loss after 4 epochs and probably lower validation accuracy and macro-F1. The curves should be smoother. Training time should be about the same, since the amount of computation does not change.
