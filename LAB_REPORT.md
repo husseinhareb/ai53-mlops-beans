@@ -72,3 +72,60 @@ Extra check: building `BeanCNN` twice after `set_reproducibility(42)` gives iden
 **Does `random_state=42` guarantee bit-for-bit identical results on every CPU/GPU/software stack?**
 
 No. The seed fixes the sequence of random numbers, not the arithmetic done with them. Floating-point addition is not associative, so results depend on the order in which operations are executed, and that order changes with the hardware (CPU instruction set such as AVX2 vs AVX-512, GPU model), the number of threads, the library versions (PyTorch, MKL/oneDNN, cuDNN, CUDA) and the kernels they choose. Some GPU operations are non-deterministic even on the same machine unless `torch.use_deterministic_algorithms(True)` is set. A seed therefore gives repeatable results on the same software stack and hardware (which is what `uv.lock` and the run manifest help pin down), and only approximately equal results elsewhere.
+
+## Milestone 2: Extract and track the images
+
+### 2.1 Get the Beans images
+
+Option A (included archives): `uv run --locked python scripts/download_dataset.py --archive-dir dataset-archives`
+
+```
+train.zip: SHA-256 OK
+validation.zip: SHA-256 OK
+test.zip: SHA-256 OK
+train     : 1034 images OK
+validation:  133 images OK
+test      :  128 images OK
+Dataset ready in data/raw/.
+```
+
+`uv run --locked python scripts/check_dataset.py`:
+
+| Split | angular_leaf_spot | bean_rust | healthy | Total | Expected |
+|-------|------------------:|----------:|--------:|------:|---------:|
+| train | 345 | 348 | 341 | 1034 | 1034 |
+| validation | 44 | 45 | 44 | 133 | 133 |
+| test | 43 | 43 | 42 | 128 | 128 |
+
+Each split contains `angular_leaf_spot/`, `bean_rust/` and `healthy/`. The class balance is close to uniform (about one third each), which matters for the choice of metric later.
+
+Note: `data/raw/train/healthy/healthy_train.120tore` (6,148 bytes, not an image, see audit issue 4) is also extracted. It is part of the original archive, so it stays in `data/raw` and is versioned with it.
+
+### 2.2 Track the images with DVC
+
+```
+uv run --locked dvc init
+uv run --locked dvc add data/raw
+uv run --locked dvc remote add -d lab-data ../ai53-phase1-dvc-storage
+uv run --locked dvc remote list
+lab-data   .../TD-Homework/ai53-phase1-dvc-storage   (default)
+```
+
+`data/raw.dvc` (the only thing Git stores about the images):
+
+```yaml
+outs:
+- md5: 2b62d5a2e86898b281d0136cef5fdf1c.dir
+  size: 179914877
+  nfiles: 1296
+  hash: md5
+  path: raw
+```
+
+`nfiles: 1296` is the 1,295 images plus the stray non-image file, which is probably why the original iBean repository reports 1,296. The `.dir` hash identifies the whole folder content: changing, adding or removing any file changes it.
+
+### Engineering checkpoint 3
+
+- **Git remote (GitHub):** stores the code, configuration, report and history, plus the small DVC pointer files such as `data/raw.dvc` that record the hash of each data version.
+- **DVC remote (`../ai53-phase1-dvc-storage`):** stores the actual file contents (the 1,296 raw files, later the processed data and model), addressed by their hashes, so any version referenced by a commit can be restored with `dvc pull`.
+- **Does `git push` transfer the raw images?** No: `data/raw/` is git-ignored and `git push` only sends `data/raw.dvc`; the images reach the DVC remote only through `dvc push`.
