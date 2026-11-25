@@ -1,12 +1,12 @@
 {
   "configuration": {
-    "augmentation_enabled": false,
+    "augmentation_enabled": true,
     "batch_size": 32,
     "dropout": 0.3,
     "epochs": 4,
     "horizontal_flip": 0.5,
     "image_size": 96,
-    "learning_rate": 0.0003,
+    "learning_rate": 0.001,
     "rotation_degrees": 10.0
   },
   "data": {
@@ -35,7 +35,7 @@
   "execution": {
     "device": "cpu",
     "mlflow_experiment": "bean-image-classification",
-    "mlflow_run_id": "e4c8dd28b6e44247a8561f226dd8ac7e",
+    "mlflow_run_id": "8abe4eb5d23b4d7ca0f4c02721bced8e",
     "random_state": 42,
     "requested_device": "auto"
   },
@@ -46,7 +46,7 @@
       "reports/train_summary.json",
       "reports/training_curves.png"
     ],
-    "commit_sha": "a9b7b9db4852f387f15b7513e076a1166826b71f",
+    "commit_sha": "f35c5a38eea61d97e68a44dd850994ed415f87d4",
     "dirty": true
   }
 }

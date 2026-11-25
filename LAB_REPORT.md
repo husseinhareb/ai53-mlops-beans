@@ -408,3 +408,35 @@ Run A: defaults. Run B: only `train.learning_rate` 0.001 to 0.0003. Both confirm
 **Change:** `params.yaml` returns to `learning_rate: 0.001` and sets `augmentation.enabled: true` (random horizontal flip with p = 0.5 and random rotation up to 10 degrees on training images only). `git diff` against Run A's commit shows this is the only difference.
 
 **Prediction:** little gain, or a small drop in validation macro-F1 compared with A. Augmentation is a regulariser: it makes each epoch harder by showing slightly different images, which reduces overfitting on long training, but with only 4 epochs Run A is not overfitting (validation loss still decreases at every epoch and stays close to the training loss), so there is little to gain yet and the model sees "harder" data for the same number of steps. Expect training loss at least as high as A's, a similar or slightly higher validation loss, and a slightly longer training time because of the extra transforms (computed on CPU, `num_workers=0`). With leaves photographed in the field, flips and small rotations do not change the class, so they should not hurt much either.
+
+`uv run --locked dvc repro train` (VALIDATE and PREPARE skipped, TRAIN rerun):
+
+```
+Epoch 01/4 | train_loss=1.0682 | val_loss=1.0004 | val_acc=0.5414 | val_macro_f1=0.5257
+Epoch 02/4 | train_loss=0.9325 | val_loss=0.8763 | val_acc=0.6090 | val_macro_f1=0.6042
+Epoch 03/4 | train_loss=0.8934 | val_loss=0.8542 | val_acc=0.6165 | val_macro_f1=0.6139
+Epoch 04/4 | train_loss=0.8768 | val_loss=0.8361 | val_acc=0.6541 | val_macro_f1=0.6416
+Training complete. MLflow Run ID: 8abe4eb5d23b4d7ca0f4c02721bced8e
+```
+
+### 7.2 Validation comparison (final epoch, the epoch of the logged model)
+
+Values read from MLflow. Each Run differs from A by exactly one parameter (checked by comparing the logged params), and all three share the same `training_data_identity`, seed and epochs.
+
+| Run | Controlled change | Val. Accuracy | Val. Macro-F1 | Training time | MLflow Run ID |
+|-----|-------------------|--------------:|--------------:|--------------:|---------------|
+| A | Baseline | 0.6391 (85/133) | 0.6254 | 11.48 s | `899741c6b66f426584516a7f7c4b5e3d` |
+| B | `learning_rate` 0.001 to 0.0003 | 0.6165 (82/133) | 0.6091 | 9.78 s | `e4c8dd28b6e44247a8561f226dd8ac7e` |
+| C | `augmentation.enabled` false to true | 0.6541 (87/133) | 0.6416 | 13.43 s | `8abe4eb5d23b4d7ca0f4c02721bced8e` |
+
+Final losses: A train 0.8671 / val 0.8328; B train 0.9198 / val 0.8927; C train 0.8768 / val 0.8361.
+
+**B compared with A: prediction supported.** The lower learning rate converged more slowly, as expected: after 4 epochs both losses are higher (val 0.8927 vs 0.8328) and macro-F1 is 0.016 lower (3 fewer correct validation images). The curves are smoother: B improves at every epoch, while A's validation scores dip slightly at epoch 4. B is still improving at epoch 4, so with more epochs it would likely catch up; the comparison only says that 0.0003 is too slow for a 4-epoch budget. The training time is 1.7 s shorter even though the computation is identical, which shows that wall-clock time on a shared CPU varies by about that much between runs and should not be over-interpreted.
+
+**C compared with A: prediction mostly supported.** I predicted little gain or a small drop. The result is a small gain: +0.016 macro-F1 and +0.015 accuracy, which is 2 more correct images out of 133. The other predictions hold: the training loss is higher (0.8768 vs 0.8671, the augmented images are harder), the validation loss is about the same (0.8361 vs 0.8328), and training is slower (13.43 s vs 11.48 s) because of the extra CPU transforms. A difference of 2 images with a single seed and a 133-image validation set is within run-to-run noise, so this does not show that augmentation is better in general; it would need several seeds (or more epochs) to conclude.
+
+### Engineering checkpoint 6
+
+**Primary metric.** Validation macro-F1 computes the F1 score of each of the three classes separately and averages them with equal weight. It therefore drops if the model neglects one class (for example confusing `angular_leaf_spot` and `bean_rust`, the two disease classes), even when overall accuracy still looks acceptable, and it takes both false positives and false negatives into account. Here the classes are nearly balanced (44 / 45 / 44 validation images), so accuracy and macro-F1 rank the three Runs the same way, but macro-F1 stays meaningful if the class balance changes in Phase 2 data, and for a disease detector every class matters equally, not only the majority. Accuracy and validation loss are kept as supporting evidence and for the tie-break.
+
+**Why the test set is used only after choosing a model.** Choosing between candidates is itself a form of fitting: whichever metric is used to pick the winner, the winner's score on that data is optimistic, because it was selected partly for being lucky on those specific images. If the test set were used to choose, the reported test score would be biased upwards and would no longer estimate how the model performs on new leaves, and nothing would be left to check that estimate. Selecting with the validation set and then scoring the single chosen Run once on the untouched test set keeps the test result an unbiased estimate of generalisation. This is why EVALUATE is a separate DAG branch that needs an explicit `selection.run_id`.
