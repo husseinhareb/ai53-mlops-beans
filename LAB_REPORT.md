@@ -359,3 +359,42 @@ Stage 'train' didn't change, skipping
 $ sha256sum -c   (hash of reports/data_quality.json taken before the run)
 reports/data_quality.json: OK
 ```
+
+### 6.4 Run B (learning rate 0.0003)
+
+`params.yaml` changed and committed alone (`a9b7b9d Lower the learning rate for Run B`), then `uv run --locked dvc repro train`:
+
+```
+'data/raw.dvc' didn't change, skipping
+Stage 'validate' didn't change, skipping
+Stage 'prepare' didn't change, skipping
+Running stage 'train':
+Epoch 01/4 | train_loss=1.0903 | val_loss=1.0809 | val_acc=0.5038 | val_macro_f1=0.4723
+Epoch 02/4 | train_loss=1.0495 | val_loss=1.0229 | val_acc=0.5714 | val_macro_f1=0.5763
+Epoch 03/4 | train_loss=0.9785 | val_loss=0.9447 | val_acc=0.5865 | val_macro_f1=0.5864
+Epoch 04/4 | train_loss=0.9198 | val_loss=0.8927 | val_acc=0.6165 | val_macro_f1=0.6091
+Training complete. MLflow Run ID: e4c8dd28b6e44247a8561f226dd8ac7e
+Updating lock file 'dvc.lock'
+```
+
+**Run B ID: `e4c8dd28b6e44247a8561f226dd8ac7e`** (MLflow shows `learning_rate=0.0003`, all other params identical to Run A).
+
+Its manifest records commit `a9b7b9d` with `dirty: true` and `changed_paths: [reports/run_manifest.json, reports/train_summary.json, reports/training_curves.png]`: DVC deletes a stage's previous outputs before running it, so Git sees TRAIN's own reports as deleted when the manifest is written. The code and params in that commit are exactly what was run.
+
+### Observed recomputation
+
+| Check | VALIDATE | PREPARE | TRAIN | EVALUATE | Evidence |
+|-------|----------|---------|-------|----------|----------|
+| 1. Rerun, nothing changed | REUSED | REUSED | REUSED | NOT RUN | `Stage 'validate' didn't change, skipping` (same for prepare, train), `Data and pipelines are up to date.` |
+| 2. Comment in `src/validate_data.py`, report unchanged | RERUN | REUSED | REUSED | NOT RUN | `Running stage 'validate'`, `Stage 'prepare' didn't change, skipping`, `Stage 'train' didn't change, skipping`; report hash unchanged (`sha256sum -c`: OK) |
+| 3. `train.learning_rate` 0.001 to 0.0003 | REUSED | REUSED | RERUN | NOT RUN | `Stage 'validate' didn't change, skipping`, `Stage 'prepare' didn't change, skipping`, `Running stage 'train'` |
+
+EVALUATE is NOT RUN in every check because `dvc repro train` only runs `train` and its upstream stages, and EVALUATE is on a separate branch of the DAG.
+
+**Comparison with the predictions.** All observed results match the predictions for VALIDATE, PREPARE and TRAIN:
+
+- Check 3 is the `train.learning_rate` row: only TRAIN reran, because the key is only in `train.params`.
+- Check 2 is the validator-edit row: VALIDATE reran because its code dep changed, but the deterministic report kept the same hash, so DVC stopped there. If the report had contained a timestamp, PREPARE and TRAIN would have rerun for nothing.
+- Check 1 has no change at all and behaves like the `README.md` row: nothing reran because no dep, param or output changed.
+
+The only difference from the prediction table is the EVALUATE column: I predicted REUSED (the saved results would still be valid), and DVC reports it as NOT RUN because `dvc repro train` does not consider it at all. The `data.image_size` row was not executed. It would have retrained and invalidated the selected Run.

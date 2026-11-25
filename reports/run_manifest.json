@@ -6,7 +6,7 @@
     "epochs": 4,
     "horizontal_flip": 0.5,
     "image_size": 96,
-    "learning_rate": 0.001,
+    "learning_rate": 0.0003,
     "rotation_degrees": 10.0
   },
   "data": {
@@ -35,17 +35,18 @@
   "execution": {
     "device": "cpu",
     "mlflow_experiment": "bean-image-classification",
-    "mlflow_run_id": "899741c6b66f426584516a7f7c4b5e3d",
+    "mlflow_run_id": "e4c8dd28b6e44247a8561f226dd8ac7e",
     "random_state": 42,
     "requested_device": "auto"
   },
   "git": {
     "available": true,
     "changed_paths": [
-      "dvc.lock",
-      "reports/data_summary.json"
+      "reports/run_manifest.json",
+      "reports/train_summary.json",
+      "reports/training_curves.png"
     ],
-    "commit_sha": "ee7a0defd6bc71e3d2d4750384c0a55317cf9800",
+    "commit_sha": "a9b7b9db4852f387f15b7513e076a1166826b71f",
     "dirty": true
   }
 }
