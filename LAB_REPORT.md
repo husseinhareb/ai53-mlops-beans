@@ -506,3 +506,12 @@ Data and pipelines are up to date.
 ```
 
 Kept for Phase 2 (not in Git): `mlflow.db`, `mlartifacts/` and `../ai53-phase1-dvc-storage`.
+
+**DVC push issue found at hand-in.** `uv run --locked dvc push --all-commits` failed with `ERROR: unexpected error - [Errno 13] Permission denied: '/ai53-phase1-dvc-storage'`. With `--all-commits`, DVC reads `.dvc/config` from each Git commit, and the relative remote URL (`../../ai53-phase1-dvc-storage`, relative to `.dvc/`) is resolved from the root of the commit tree instead of the project folder. Fix without changing the committed config: `dvc remote modify --local lab-data url <absolute path>`, which writes the git-ignored `.dvc/config.local`. After that, the push ran but still skipped the `models/model.pt` checkpoints of Run A and Run B (DVC did not collect them from the older commits), so I pushed them by temporarily restoring the `dvc.lock` of commits `94de7df` and `e9e8667` and running `dvc push train` (1 file each), then restoring `dvc.lock`. Final check:
+
+```
+$ uv run --locked dvc status -c --all-commits
+Cache and remote 'lab-data' are in sync.
+```
+
+Every output hash in every committed `dvc.lock` is now in the DVC remote (2,601 objects in both cache and remote). On another machine, set the remote URL with `--local` the same way before `dvc pull`.
