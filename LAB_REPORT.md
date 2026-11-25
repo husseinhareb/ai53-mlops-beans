@@ -129,3 +129,32 @@ outs:
 - **Git remote (GitHub):** stores the code, configuration, report and history, plus the small DVC pointer files such as `data/raw.dvc` that record the hash of each data version.
 - **DVC remote (`../ai53-phase1-dvc-storage`):** stores the actual file contents (the 1,296 raw files, later the processed data and model), addressed by their hashes, so any version referenced by a commit can be restored with `dvc pull`.
 - **Does `git push` transfer the raw images?** No: `data/raw/` is git-ignored and `git push` only sends `data/raw.dvc`; the images reach the DVC remote only through `dvc push`.
+
+## Milestone 3: Core data-quality gate
+
+`validate_dataset()` in `src/validate_data.py` checks, in order, for each split:
+
+| # | Check | Implementation | Failure |
+|---|-------|----------------|---------|
+| 1 | Split exists | `(raw_root / split).is_dir()` | `FileNotFoundError` |
+| 2 | Exactly the three classes | sorted sub-folder names must equal `EXPECTED_CLASSES` (reports missing and unexpected ones) | `RuntimeError` |
+| 5 | No empty class | each class must contain at least one image | `RuntimeError` |
+| 4 | Full decode | `Image.open(path)` then `image.load()`, which decodes all pixel data, not only the header | `OSError` with the file path |
+| 3 | Exact count | per-split total must equal `EXPECTED_SPLITS` (1034 / 133 / 128) | `RuntimeError` |
+| 6 | Deterministic report | no timestamps, files and classes iterated in sorted order, `json.dumps(..., sort_keys=True)` | n/a |
+
+Any exception makes `python -m src.validate_data` exit non-zero, so DVC stops before PREPARE. Images are recognised by extension (`.jpg`, `.jpeg`, `.png`). Other files are not counted but are listed in `ignored_files`, which makes the stray `train/healthy/healthy_train.120tore` (audit issue 4) visible in the report instead of silently skipped.
+
+```
+$ uv run --locked pytest -q tests/test_data_validation.py tests/test_validation_contract.py
+.......                                                                  [100%]
+7 passed in 0.19s
+$ uv run --locked python -m src.validate_data
+  "status": "PASS", "total_images": 1295,
+  "ignored_files": ["train/healthy/healthy_train.120tore"]
+  train 1034 (345 / 348 / 341), validation 133 (44 / 45 / 44), test 128 (43 / 43 / 42)
+```
+
+Running the validator twice produces a byte-identical `reports/data_quality.json` (checked with `cmp`), so DVC will only see a change when the data does.
+
+Extra check (on a copy of `data/raw`, not committed): cutting a test JPEG in half leaves a valid header (`Image.open()` still reports `JPEG (500, 500)`), but the validator rejects it: `OSError - Cannot decode image .../healthy_test.0.jpg: image file is truncated`. A header-only check would have let it through.
