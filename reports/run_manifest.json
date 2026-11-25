@@ -1,0 +1,51 @@
+{
+  "configuration": {
+    "augmentation_enabled": false,
+    "batch_size": 32,
+    "dropout": 0.3,
+    "epochs": 4,
+    "horizontal_flip": 0.5,
+    "image_size": 96,
+    "learning_rate": 0.001,
+    "rotation_degrees": 10.0
+  },
+  "data": {
+    "train_manifest": "data/processed/manifests/train.csv",
+    "training_data_identity": "8fa943ff6c17a3c874d2b152e9d7980602a5cd50c0d8156625bd00590a3d8c6c",
+    "validation_manifest": "data/processed/manifests/validation.csv"
+  },
+  "environment": {
+    "cuda_available": false,
+    "cuda_runtime": null,
+    "cudnn": null,
+    "dvc": "3.67.1",
+    "machine": "x86_64",
+    "mlflow": "3.17.1",
+    "numpy": "2.5.4",
+    "os": "Linux",
+    "pandas": "2.3.3",
+    "pillow": "12.3.0",
+    "platform": "Linux-7.3.5-arch1-1-x86_64-with-glibc2.44",
+    "python": "3.12.14",
+    "python_implementation": "CPython",
+    "scikit-learn": "1.9.1",
+    "torch": "2.11.0+cpu",
+    "torchvision": "0.26.0+cpu"
+  },
+  "execution": {
+    "device": "cpu",
+    "mlflow_experiment": "bean-image-classification",
+    "mlflow_run_id": "899741c6b66f426584516a7f7c4b5e3d",
+    "random_state": 42,
+    "requested_device": "auto"
+  },
+  "git": {
+    "available": true,
+    "changed_paths": [
+      "dvc.lock",
+      "reports/data_summary.json"
+    ],
+    "commit_sha": "ee7a0defd6bc71e3d2d4750384c0a55317cf9800",
+    "dirty": true
+  }
+}

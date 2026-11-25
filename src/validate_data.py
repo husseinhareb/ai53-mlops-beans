@@ -86,7 +86,7 @@ def validate_dataset(raw_root: Path) -> dict:
 
             class_counts[class_name] = len(images)
 
-        # 3. exact count per split
+        # 3. exact count per split (non-image files were excluded above)
         total = sum(class_counts.values())
         if total != expected_splits[split]:
             raise RuntimeError(

@@ -302,3 +302,60 @@ Assumption: all outputs, including the test results, are up to date; one change 
 - **Primary metric:** validation macro-F1 at the final epoch (`val_macro_f1`, the logged model is the last-epoch model).
 - **Tie-break:** if two Runs are within 0.01 macro-F1 (about one validation image out of 133), choose the lower final `val_loss`; if still tied, the shorter `training_seconds`.
 - **Expected effect of a lower learning rate (0.001 to 0.0003):** with Adam and only 4 epochs, each step moves the weights about three times less, so the model should converge more slowly: higher train and validation loss after 4 epochs and probably lower validation accuracy and macro-F1. The curves should be smoother. Training time should be about the same, since the amount of computation does not change.
+
+### 6.2 MLflow server
+
+Started from the project folder (in the background, in place of terminal 2):
+`uv run --locked mlflow server --host 127.0.0.1 --port 5000 --workers 1 --backend-store-uri sqlite:///mlflow.db`, UI at http://127.0.0.1:5000.
+
+### 6.3 Run A (baseline, default settings)
+
+`uv run --locked dvc repro train`:
+
+```
+'data/raw.dvc' didn't change, skipping
+Running stage 'validate':
+Running stage 'prepare':
+Running stage 'train':
+Epoch 01/4 | train_loss=1.0639 | val_loss=0.9811 | val_acc=0.5639 | val_macro_f1=0.5562
+Epoch 02/4 | train_loss=0.9123 | val_loss=0.8819 | val_acc=0.6241 | val_macro_f1=0.6119
+Epoch 03/4 | train_loss=0.8874 | val_loss=0.8472 | val_acc=0.6466 | val_macro_f1=0.6445
+Epoch 04/4 | train_loss=0.8671 | val_loss=0.8328 | val_acc=0.6391 | val_macro_f1=0.6254
+Training complete. MLflow Run ID: 899741c6b66f426584516a7f7c4b5e3d
+```
+
+**Run A ID: `899741c6b66f426584516a7f7c4b5e3d`**
+
+Checked in MLflow (experiment `bean-image-classification`, status FINISHED):
+
+- 11 params present (`image_size=96`, `batch_size=32`, `epochs=4`, `learning_rate=0.001`, `dropout=0.3`, `random_state=42`, `augmentation_enabled=False`, `horizontal_flip=0.5`, `rotation_degrees=10.0`, `device=cpu`, `training_data_identity=8fa943ff6c17a3c8...`);
+- `train_loss`, `val_loss`, `val_accuracy`, `val_macro_f1` logged at steps 1, 2, 3, 4, plus `training_seconds=11.48`;
+- dataset input `bean-training` with context `training`;
+- artifacts `reports/run_manifest.json`, `reports/train_summary.json`, `reports/training_curves.png`;
+- logged model `bean-cnn`;
+- `run_manifest.json`: commit `ee7a0de`, `dirty: true` with `changed_paths: [dvc.lock, reports/data_summary.json]`. Only pipeline outputs written by VALIDATE and PREPARE in the same `dvc repro`, no code change.
+
+Epoch 1 is bit-identical to the 1-epoch smoke run of Milestone 5 (`train_loss=1.0639`, `val_acc=0.5639`), which ran in a different folder and process: the seeding works.
+
+**Check 1, rerun without any change:**
+
+```
+'data/raw.dvc' didn't change, skipping
+Stage 'validate' didn't change, skipping
+Stage 'prepare' didn't change, skipping
+Stage 'train' didn't change, skipping
+Data and pipelines are up to date.
+```
+
+**Check 2, comment added to `src/validate_data.py`:**
+
+```
+'data/raw.dvc' didn't change, skipping
+Running stage 'validate':
+> uv run --locked python -m src.validate_data
+Updating lock file 'dvc.lock'
+Stage 'prepare' didn't change, skipping
+Stage 'train' didn't change, skipping
+$ sha256sum -c   (hash of reports/data_quality.json taken before the run)
+reports/data_quality.json: OK
+```
