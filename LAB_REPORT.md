@@ -440,3 +440,16 @@ Final losses: A train 0.8671 / val 0.8328; B train 0.9198 / val 0.8927; C train 
 **Primary metric.** Validation macro-F1 computes the F1 score of each of the three classes separately and averages them with equal weight. It therefore drops if the model neglects one class (for example confusing `angular_leaf_spot` and `bean_rust`, the two disease classes), even when overall accuracy still looks acceptable, and it takes both false positives and false negatives into account. Here the classes are nearly balanced (44 / 45 / 44 validation images), so accuracy and macro-F1 rank the three Runs the same way, but macro-F1 stays meaningful if the class balance changes in Phase 2 data, and for a disease detector every class matters equally, not only the majority. Accuracy and validation loss are kept as supporting evidence and for the tie-break.
 
 **Why the test set is used only after choosing a model.** Choosing between candidates is itself a form of fitting: whichever metric is used to pick the winner, the winner's score on that data is optimistic, because it was selected partly for being lucky on those specific images. If the test set were used to choose, the reported test score would be biased upwards and would no longer estimate how the model performs on new leaves, and nothing would be left to check that estimate. Selecting with the validation set and then scoring the single chosen Run once on the untouched test set keeps the test result an unbiased estimate of generalisation. This is why EVALUATE is a separate DAG branch that needs an explicit `selection.run_id`.
+
+## Milestone 8: Select and test one model
+
+### Selection (validation evidence only, rule fixed in Milestone 6)
+
+**Selected Run: C, `8abe4eb5d23b4d7ca0f4c02721bced8e`** (augmentation enabled, learning rate 0.001, 4 epochs, seed 42).
+
+- **Main metric:** final-epoch validation macro-F1 = **0.6416**, the highest of the three (A 0.6254, B 0.6091).
+- **Tie-break:** not needed. C leads A by 0.0162, more than the 0.01 tie margin fixed before training.
+- **Other evidence:** C also has the highest validation accuracy (0.6541, 87/133), and its validation loss (0.8361) is practically the same as A's (0.8328), so the higher scores do not come with worse calibrated probabilities. MLflow shows the Run is FINISHED, in experiment `bean-image-classification`, with `image_size=96` and the same `training_data_identity` as the current prepared data. Augmentation only changes the training input stream, so the logged model takes the same preprocessed input as A and B.
+- **Trade-off / limitation:** the margin over A is 2 validation images out of 133 from a single seed, which is within run-to-run noise, so the choice of C over A is weakly supported; repeating A and C with several seeds would be needed to claim augmentation helps. C also trains about 17% slower (13.4 s vs 11.5 s) because of the CPU transforms. Finally, all candidates reach only about 64% validation accuracy after 4 epochs, so the selected model is a reproducible baseline, not a production-quality classifier.
+
+`params.yaml`: `selection.run_id: "8abe4eb5d23b4d7ca0f4c02721bced8e"` (no other setting changed).
