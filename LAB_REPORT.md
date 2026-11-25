@@ -398,3 +398,13 @@ EVALUATE is NOT RUN in every check because `dvc repro train` only runs `train` a
 - Check 1 has no change at all and behaves like the `README.md` row: nothing reran because no dep, param or output changed.
 
 The only difference from the prediction table is the EVALUATE column: I predicted REUSED (the saved results would still be valid), and DVC reports it as NOT RUN because `dvc repro train` does not consider it at all. The `data.image_size` row was not executed. It would have retrained and invalidated the selected Run.
+
+## Milestone 7: Compare three controlled runs
+
+Run A: defaults. Run B: only `train.learning_rate` 0.001 to 0.0003. Both confirmed in MLflow (all other params identical).
+
+### 7.1 Run C setup and prediction (written before training)
+
+**Change:** `params.yaml` returns to `learning_rate: 0.001` and sets `augmentation.enabled: true` (random horizontal flip with p = 0.5 and random rotation up to 10 degrees on training images only). `git diff` against Run A's commit shows this is the only difference.
+
+**Prediction:** little gain, or a small drop in validation macro-F1 compared with A. Augmentation is a regulariser: it makes each epoch harder by showing slightly different images, which reduces overfitting on long training, but with only 4 epochs Run A is not overfitting (validation loss still decreases at every epoch and stays close to the training loss), so there is little to gain yet and the model sees "harder" data for the same number of steps. Expect training loss at least as high as A's, a similar or slightly higher validation loss, and a slightly longer training time because of the extra transforms (computed on CPU, `num_workers=0`). With leaves photographed in the field, flips and small rotations do not change the class, so they should not hurt much either.
