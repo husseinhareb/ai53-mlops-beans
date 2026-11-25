@@ -453,3 +453,56 @@ Final losses: A train 0.8671 / val 0.8328; B train 0.9198 / val 0.8927; C train 
 - **Trade-off / limitation:** the margin over A is 2 validation images out of 133 from a single seed, which is within run-to-run noise, so the choice of C over A is weakly supported; repeating A and C with several seeds would be needed to claim augmentation helps. C also trains about 17% slower (13.4 s vs 11.5 s) because of the CPU transforms. Finally, all candidates reach only about 64% validation accuracy after 4 epochs, so the selected model is a reproducible baseline, not a production-quality classifier.
 
 `params.yaml`: `selection.run_id: "8abe4eb5d23b4d7ca0f4c02721bced8e"` (no other setting changed).
+
+### Final test (run once, after the selection commit `09132e0`)
+
+`uv run --locked dvc repro evaluate`, with the MLflow server running:
+
+```
+'data/raw.dvc' didn't change, skipping
+Stage 'validate' didn't change, skipping
+Stage 'prepare' didn't change, skipping
+Running stage 'evaluate':
+> uv run --locked python -m src.evaluate
+Loading selected model: runs:/8abe4eb5d23b4d7ca0f4c02721bced8e/bean-cnn
+Updating lock file 'dvc.lock'
+```
+
+TRAIN was not run: EVALUATE took the model from MLflow through `selection.run_id`. Before scoring, `validate_selected_run()` accepted the Run (FINISHED, correct experiment, `image_size` 96, matching `training_data_identity`), and the model metadata matched the test class order.
+
+`reports/test_metrics.json` lists the selected Run ID:
+
+```json
+{
+  "selected_run_id": "8abe4eb5d23b4d7ca0f4c02721bced8e",
+  "test_accuracy": 0.640625,
+  "test_macro_f1": 0.6366339869281047,
+  "training_data_identity": "8fa943ff6c17a3c874d2b152e9d7980602a5cd50c0d8156625bd00590a3d8c6c"
+}
+```
+
+| Selected Run | Val. Macro-F1 | Test Macro-F1 | Val. Accuracy | Test Accuracy |
+|--------------|--------------:|--------------:|--------------:|--------------:|
+| C `8abe4eb5d23b4d7ca0f4c02721bced8e` | 0.6416 | **0.6366** | 0.6541 (87/133) | **0.6406** (82/128) |
+
+`reports/test_confusion_matrix.png` (rows = true class, columns = predicted):
+
+| True \ Predicted | angular_leaf_spot | bean_rust | healthy | Recall |
+|------------------|------------------:|----------:|--------:|-------:|
+| angular_leaf_spot (43) | **23** | 11 | 9 | 0.53 |
+| bean_rust (43) | 7 | **25** | 11 | 0.58 |
+| healthy (42) | 2 | 6 | **34** | 0.81 |
+
+**Interpretation.** The test scores are within about 0.01 of the validation scores, so the selection did not produce an over-optimistic estimate: the validation set was a fair guide. The per-class view shows the main weakness: healthy leaves are recognised well (recall 0.81), but the two diseases are often confused with each other (11 + 7 images) and, more seriously, 20 of the 86 diseased test leaves (9 + 11) are predicted healthy. For a disease-detection use case those missed diseases are the most costly errors, so Phase 2 should look at per-class recall for the disease classes, not only macro-F1. Longer training and a larger image size are the obvious next experiments, compared through new validation Runs, not on this test set.
+
+### Hand-in checks
+
+```
+$ uv run --locked pytest -q
+...................                                                      [100%]
+19 passed
+$ uv run --locked dvc status
+Data and pipelines are up to date.
+```
+
+Kept for Phase 2 (not in Git): `mlflow.db`, `mlartifacts/` and `../ai53-phase1-dvc-storage`.
